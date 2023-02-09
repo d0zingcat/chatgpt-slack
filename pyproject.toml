@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "chatgpt-slack"
+version = "0.1.0"
+description = ""
+authors = ["Lee Tang <i@d0zingcat.dev>"]
+readme = "README.md"
+packages = []
+
+[tool.poetry.dependencies]
+python = "^3.9.0"
+openai = "^0.26.4"
+slack-bolt = "^1.16.1"
+tiktoken = "^0.2.0"
+
+
+[tool.poetry.group.dev.dependencies]
+python-dotenv = "^0.21.1"
+ipython = "^8.9.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
