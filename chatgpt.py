@@ -16,8 +16,7 @@ or one daemon timer to check
 
 MODEL_ENGINE: str = 'text-davinci-003'
 TOKEN_LIMIT: int = 4000
-# ENCODER = tiktoken.get_encoding("gpt2")
-ENCODER = tiktoken.encoding_for_model("text-davinci-003")
+ENCODER = tiktoken.encoding_for_model(MODEL_ENGINE)
 
 
 @dataclass
@@ -25,6 +24,7 @@ class Conversation:
     start_time: float
     last_active_time: float
     chat_history: list = field(default_factory=list)
+    last_req = ''
     temperature: float = 0.5
     model_engine: str = 'text-davinci-003'
     base_prompt: str = f"You are ChatGPT, a large language model trained by OpenAI. Respond conversationally. Do not answer as the user. Current date: {str(date.today())}\n\nUser: Hello\nChatGPT: Hello! How can I help you today? <|im_end|>\n\n\n"
@@ -45,7 +45,7 @@ class ConversationManagement(object):
                  context_max: int = 100,
                  token_max: int = 10000,
                  check_interval: int = 5 * 60,
-                 conversation_timeout: int = 30 * 60
+                 conversation_timeout: int = 3 * 24 * 60 * 60
                  ) -> None:
         self._CAPACITY = capacity
         self._CONTEXT_MAX = context_max
@@ -79,6 +79,7 @@ class ConversationManagement(object):
 
     def get_conversation(self, key: str):
         self._check_conversation_and_update()
+        print('storage=', self.__storage)
         if key not in self.__storage:
             return None
         conversation = self.__storage[key]
@@ -102,6 +103,7 @@ class ConversationManagement(object):
         conversation.last_active_time = time.time()
         conversation.start_time = time.time()
         self.__storage[key] = conversation
+        print('storage=', self.__storage)
         return conversation
 
     def add_to_conversation_history(self, conversation_id: str, req: str, resp: str, ):
@@ -123,6 +125,7 @@ class ChatGPT:
         OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
         self.api_key = OPENAI_API_KEY
         self.engine = MODEL_ENGINE
+        openai.api_key = self.api_key
 
     def _get_completion(
         self,
@@ -176,6 +179,40 @@ class ChatGPT:
         )
         return completion
 
+    def get_conversation(self, conversation_id: str) -> Conversation:
+        conversation = None
+        conversation = manager.get_conversation(conversation_id)
+        if not conversation:
+            conversation = manager.make_conversation(conversation_id)
+        return conversation
+
+    def ask(self,
+            req: str,
+            conversation_id: str,
+            model: str = None) -> str:
+        conversation = self.get_conversation(conversation_id)
+        conversation.last_req = req
+        context = conversation.make_chat_context(req)
+        print('context=', context)
+        completion = self._get_completion(context)
+        completion = self._process_completion(req, completion)
+        print('completion=', completion)
+        resp = completion['choices'][0]['text']
+        conversation.add_history(req, resp)
+        return resp
+
+    def retry(self,
+              conversation_id: str
+              ) -> str:
+        conversation = self.get_conversation(conversation_id)
+        return self.ask(conversation.last_req,
+                        conversation_id)
+
+    def prune_context(self, conversation_id:str) -> bool:
+        conversation = self.get_conversation(conversation_id)
+        conversation.chat_history.clear()
+        return True
+
     def ask_stream(
         self,
         user_request: str,
@@ -192,24 +229,6 @@ class ChatGPT:
             user_request=user_request,
             completion=self._get_completion(prompt, temperature, stream=True),
         )
-
-    def ask(self,
-            req: str,
-            conversation_id: str,
-            model: str = None) -> str:
-        openai.api_key = self.api_key
-        conversation = None
-        conversation = manager.get_conversation(conversation_id)
-        if not conversation:
-            conversation = manager.make_conversation(conversation_id)
-        context = conversation.make_chat_context(req)
-        print('context=', context)
-        completion = self._get_completion(context)
-        completion = self._process_completion(req, completion)
-        print('completion=', completion)
-        resp = completion['choices'][0]['text']
-        conversation.add_history(req, resp)
-        return resp
 
 
 chatgpt = ChatGPT()

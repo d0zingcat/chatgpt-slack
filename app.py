@@ -14,7 +14,25 @@ app = App(
     signing_secret=os.environ.get("SLACK_SIGNING_SECRET"),
 )
 
-# Add functionality here
+ERROR_MSG = 'Sorry something\'s wrong(RateLimit or server overload or anything), please enter the message above again!'
+
+
+def make_command_conversation_id(channel_id: str, user_id: str, channel_name: str) -> str:
+    conversation_id = None
+    if channel_name == 'directmessage':
+        conversation_id = f'{user_id}-{channel_id}'
+        # TODO:
+    # elif channel_type == 'group' or channel_type == 'channel':
+    #     if not thread_ts and not conversation_id:
+    #         return
+    #     conversation_id = f'{user}-{channel}-{thread_ts}'
+    return conversation_id
+
+
+@app.middleware  # or app.use(log_request)
+def log_request(logger, body, next):
+    logger.debug(body)
+    return next()
 
 
 @app.options('menu_selection')
@@ -23,10 +41,39 @@ def show_menu_options(ack):
     ack(options=options)
 
 
-@app.command("/start")
-def handle_some_command(ack, body, logger):
+@app.command('/start')
+def handle_start_command(ack, say, body, logger):
     ack()
-    logger.info(body)
+    channel_id = body['channel_id']
+    user_id = body['user_id']
+    channel_name = body['channel_name']
+    say(text=f'Hi! <@{user_id}> :laughing: Happy chatting!', channel_id=channel_id)
+
+
+@app.command("/terminate")
+def handle_terminate_command(ack, body, logger, say):
+    ack()
+    channel_id = body['channel_id']
+    user_id = body['user_id']
+    channel_name = body['channel_name']
+    conversation_id = make_command_conversation_id(channel_id, user_id, channel_name)
+    chatgpt.prune_context(conversation_id)
+    say(text='Clear context successfully!', channel_id=channel_id)
+
+
+@app.command('/retry')
+def handle_retry_command(ack, say, body, logger):
+    ack()
+    channel_id = body['channel_id']
+    user_id = body['user_id']
+    channel_name = body['channel_name']
+    conversation_id = make_command_conversation_id(channel_id, user_id, channel_name)
+    try:
+        resp = chatgpt.retry(conversation_id)
+    except Exception as e:
+        print(e)
+        resp = ERROR_MSG + "\n\n" + str(e)
+    say(text=resp, channel_id=channel_id)
 
 
 @app.event("message")
@@ -38,25 +85,21 @@ def handle_message_events(body, logger, say):
     user = event['user']
     text = event['text']
     thread_ts = event.get('thread_ts')
-    if not thread_ts:
-        return
-    resp = chatgpt.ask(text, f'{user}-{thread_ts}')
-    # say(
-    #     blocks=[
-    #         {
-    #             "type": "section",
-    #             "text": {"type": "mrkdwn", "text": f"Hey there <@{user}>!"},
-    #             "accessory": {
-    #                 "type": "button",
-    #                 "text": {"type": "plain_text", "text": "Click Me"},
-    #                 "action_id": "button_click",
-    #             },
-    #         }
-    #     ],
-    #     text=f"Hey there <@{user}>!",
-    #     thread_ts=thread_ts
-    #     # channel_id=channel_id
-    # )
+    channel_type = event.get('channel_type')
+    channel = event.get('channel')
+
+    conversation_id = None
+    if channel_type == 'im':
+        conversation_id = f'{user}-{channel}'
+    elif channel_type == 'group' or channel_type == 'channel':
+        if not thread_ts and not conversation_id:
+            return
+        conversation_id = f'{user}-{channel}-{thread_ts}'
+    try:
+        resp = chatgpt.ask(text, conversation_id)
+    except Exception as e:
+        print(e)
+        resp = ERROR_MSG + "\n\n" + str(e)
     say(text=resp, channel_id=channel_id, thread_ts=thread_ts)
 
 
@@ -64,12 +107,15 @@ def handle_message_events(body, logger, say):
 def mention_events(event, say, logger):
     logger.info(event)
 
-    user_id = event['user']
-    channel_id = event['channel']
-    ts = event['ts']
+    user_id = event.get('user')
+    channel_id = event.get('channel')
+    ts = event.get('ts')
 
     text = f"Welcome to the chat, <@{user_id}>! :tada: Happy chatting!."
-    say(text=text, channel=channel_id, thread_ts=ts)
+    if ts:
+        say(text=text, channel=channel_id, thread_ts=ts)
+    else:
+        say(text=text, channel=channel_id)
 
 
 if __name__ == "__main__":
