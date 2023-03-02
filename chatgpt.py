@@ -1,13 +1,15 @@
-import os
 import time
 from datetime import date
 import json
+from enum import Enum
 from dataclasses import dataclass, field
 from typing import Dict
 
 import openai
 import tiktoken
+import redis
 
+import config
 
 """
 TODO: should use async to evict expired context,
@@ -17,6 +19,16 @@ or one daemon timer to check
 MODEL_ENGINE: str = 'text-davinci-003'
 TOKEN_LIMIT: int = 4000
 ENCODER = tiktoken.encoding_for_model(MODEL_ENGINE)
+
+
+class Model(Enum):
+    GPT3 = 'text-davinci-003'
+    GPT3_TURBO = 'gpt-3.5-turbo'
+
+
+class Provider(Enum):
+    OPENAI = 'openai'
+    EDGE = 'microsoft-edge'
 
 
 @dataclass
@@ -45,7 +57,7 @@ class ConversationManagement(object):
                  context_max: int = 100,
                  token_max: int = 10000,
                  check_interval: int = 5 * 60,
-                 conversation_timeout: int = 3 * 24 * 60 * 60
+                 conversation_timeout: int = 3 * 24 * 60 * 60,
                  ) -> None:
         self._CAPACITY = capacity
         self._CONTEXT_MAX = context_max
@@ -54,6 +66,8 @@ class ConversationManagement(object):
         self._CHECKPOINT_TIME = self._START_TIME
         self._INTERVAL = check_interval
         self._CONVERSATION_TIMEOUT = conversation_timeout
+
+        self._redis_client = redis.StrictRedis.from_url(config.REDIS_URL)
         self.__storage: Dict[str, Conversation] = dict()
 
     def _check_capacity(self) -> bool:
@@ -70,6 +84,10 @@ class ConversationManagement(object):
         for k, conversation in self.__storage.items():
             if time.time() - conversation.last_active_time > self._CONVERSATION_TIMEOUT:
                 del self.__storage[k]
+                self._redis_client.delete(k)
+            else:
+                self._redis_client.set(k, json.dumps(self.__storage[k].history))
+                self._redis_client.expire(k, conversation.last_active_time + self._CONVERSATION_TIMEOUT - time.time())
 
     def _check_conversation_and_update(self):
         if self._should_check_contexts():
@@ -121,8 +139,13 @@ manager = ConversationManagement()
 
 
 class ChatGPT:
-    def __init__(self):
-        OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+
+    def __init__(self, provider: Provider = None):
+        OPENAI_API_KEY = config.OPENAI_API_KEY
+        if not provider:
+            provider = Provider.OPENAI
+        self.proviver = provider
+
         self.api_key = OPENAI_API_KEY
         self.engine = MODEL_ENGINE
         openai.api_key = self.api_key
@@ -208,7 +231,7 @@ class ChatGPT:
         return self.ask(conversation.last_req,
                         conversation_id)
 
-    def prune_context(self, conversation_id:str) -> bool:
+    def prune_context(self, conversation_id: str) -> bool:
         conversation = self.get_conversation(conversation_id)
         conversation.chat_history.clear()
         return True
@@ -231,4 +254,5 @@ class ChatGPT:
         )
 
 
+chatgpt = ChatGPT()
 chatgpt = ChatGPT()
