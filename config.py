@@ -8,4 +8,5 @@ SLACK_SOCKET_MODE = os.environ.get('SLACK_SOCKET_MODE')
 SLACK_ASYNC_APP = os.environ.get('SLACK_ASYNC_APP')
 
 REDIS_URL = os.environ.get('REDIS_URL')
+SENTRY_DSN = os.environ.get('SENTRY_DSN')
 SERVER_PORT = int(os.environ.get("PORT", 4000))

@@ -1,0 +1,29 @@
+from typing import List, Dict, Any
+
+import config
+
+
+def options() -> List[Dict[str, Any]]:
+    return [
+        {
+            "text": {
+                "type": "plain_text",
+                "text": "*this is plain_text text*"
+            },
+            "value": "value-0"
+        },
+        {
+            "text": {
+                "type": "plain_text",
+                "text": "*this is plain_text text*"
+            },
+            "value": "value-1"
+        },
+        {
+            "text": {
+                "type": "plain_text",
+                "text": "*this is plain_text text*"
+            },
+            "value": "value-2"
+        }
+    ]

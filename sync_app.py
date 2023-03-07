@@ -2,7 +2,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 import config
-from chatgpt import chatgpt
+from chatgpt_legacy import chatgpt
 
 
 def make_command_conversation_id(channel_id: str, user_id: str, channel_name: str) -> str:
@@ -35,12 +35,6 @@ app = init_app()
 def log_request(logger, body, next):
     logger.debug(body)
     return next()
-
-
-@app.options('menu_selection')
-def show_menu_options(ack):
-    options = [{"text": {"type": "plain_text", "text": "Option 1"}, "value": "1-1", }, {"text": {"type": "plain_text", "text": "Option 2"}, "value": "1-2", }, ]
-    ack(options=options)
 
 
 @app.command('/start')
