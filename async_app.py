@@ -18,14 +18,31 @@ class ChatGPT:
     def __init__(self, api_key: str):
         self._api_key = api_key
         self.temperature = 0
+        self.max_tokens = 4096
         openai.api_key = self._api_key
 
     def chat_completion(self, messages: List[any], temperature: float = 0, max_tokens: int = 0):
         temperature = temperature or self.temperature
-        completion_resp = openai.ChatCompletion.create(model=Models.TURBO.value, messages=messages, temperature=temperature)
+        completion_resp = openai.ChatCompletion.create(
+            model=Models.TURBO.value,
+            messages=messages,
+            temperature=temperature,
+        )
         usage = completion_resp['usage']
         logging.debug(usage)
         return completion_resp['choices'][0].message
+
+    def chat_completion_stream(self, messages: List[any], temperature: float = 0, max_tokens: int = 0):
+        temperature = temperature or self.temperature
+        max_tokens = max_tokens or self.max_tokens
+        events = openai.ChatCompletion.create(
+            model=Models.TURBO.value,
+            messages=messages,
+            temperature=temperature,
+            stream=True
+        )
+        for event in events:
+            yield event['choices'][0].message
 
 
 gpt = ChatGPT(config.OPENAI_API_KEY)
@@ -34,23 +51,23 @@ gpt = ChatGPT(config.OPENAI_API_KEY)
 class ConversationManager:
     r = redis.from_url(config.REDIS_URL, decode_responses=True)
 
+    DEFAULT_TTL = 60 * 60 * 24 * 7  # 7 days
+
     CONVERSATION_NAME_KEY = 'conversation_name'
     CONVERSATION_CONTENT_KEY = 'conversation_content'
     CONVERSATION_META_KEY = 'conversation_meta'
 
     _storage = dict()
 
-    def _marshal(self, data: any): return json.dumps(data)
+    def _marshal(self, data: any):
+        return json.dumps(data)
 
     def _unmarshal(self, data: bytes):
         if not data:
             return None
         return json.loads(data)
 
-    def __init__(self):
-        return
-
-    async def get_current_conversation_meta(self, user_id: str):
+    async def get_conversation_meta(self, user_id: str):
         return await self.r.hget(self.CONVERSATION_META_KEY, user_id) or {}
 
     async def get_conversations_by_user(self, user_id: str):
@@ -60,14 +77,16 @@ class ConversationManager:
         conversation_id = conversation_id or '0'
         r = self._unmarshal(await self.r.hget(f'{self.CONVERSATION_CONTENT_KEY}:{user_id}', conversation_id))
         if r:
-            return r
+            return r, False
         default_conversation = [{'role': 'system', 'content': 'You are a helpful assistant.'},]
         await self.r.hset(f'{self.CONVERSATION_CONTENT_KEY}:{user_id}', conversation_id, self._marshal(default_conversation))
-        return default_conversation
+        await self.r.expire(f'{self.CONVERSATION_CONTENT_KEY}:{user_id}', self.DEFAULT_TTL)
+        return default_conversation, True
 
     async def set_conversation(self, user_id: str, conversation_id: str = None, messages: List[any] = None):
         conversation_id = conversation_id or '0'
         await self.r.hset(f'{self.CONVERSATION_CONTENT_KEY}:{user_id}', conversation_id, self._marshal(messages))
+        await self.r.expire(f'{self.CONVERSATION_CONTENT_KEY}:{user_id}', self.DEFAULT_TTL)
         return True
 
     async def clear_conversation(self, user_id: str, conversation_id: str = None):
@@ -99,7 +118,7 @@ async def terminate_command(ack, body):
     user_id = body["user_id"]
     conversation_id = body.get('text')
     await manager.clear_conversation(user_id, conversation_id)
-    await ack(text='Conversation terminated.')
+    await ack(text=f'Conversation {conversation_id or 0} terminated.')
 
 
 @app.command("/ls")
@@ -149,8 +168,10 @@ async def handle_message_events(body, say):
     channel_type = event.get('channel_type')
     channel = event.get('channel')
 
-    conversation_id = (await manager.get_current_conversation_meta(user_id)).get('conversation_id')
-    c = await manager.get_conversation(user_id, conversation_id)
+    conversation_id = (await manager.get_conversation_meta(user_id)).get('conversation_id')
+    c, is_default = await manager.get_conversation(user_id, conversation_id)
+    if is_default:
+        await say(text='[System] Hi! You\'ve started a new conversation! Please be patient and wait for ChatGPT to reply...')
     c.append({'role': 'user', 'content': text})
     message = gpt.chat_completion(c)
     c.append({'role': message.role, 'content': message.content})
