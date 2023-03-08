@@ -5,7 +5,6 @@ import logging
 import re
 
 from slack_bolt.async_app import AsyncApp
-from slack_bolt.middleware.message_listener_matches.async_message_listener_matches import AsyncMessageListenerMatches
 import redis.asyncio as redis
 import openai
 
@@ -89,16 +88,22 @@ class ConversationManager:
         conversation_names = await self.r.hgetall(f'{self.CONVERSATION_DICT_KEY}:{user_id}')
         return conversation_names
 
+    async def get_conversation_dict_by_id(self, user_id: str, conversation_id: str):
+        conversation_name = await self.r.hget(f'{self.CONVERSATION_DICT_KEY}:{user_id}', conversation_id)
+        return conversation_name
+
     async def create_conversation(self, user_id: str) -> (str, bool):
-        lgth = await self.r.llen(f'{self.CONVERSATION_ID_KEY}:{user_id}')
-        if not lgth:
-            await self.r.rpush(f'{self.CONVERSATION_ID_KEY}:{user_id}', 0)
-            return 0, True
-        max_converastion_id = int(await self.r.lindex(f'{self.CONVERSATION_ID_KEY}:{user_id}', lgth - 1))
-        if max_converastion_id >= self.MAX_CONVERSATIONS - 1:
+        all_conversation_ids = await self.r.lrange(f'{self.CONVERSATION_ID_KEY}:{user_id}', 0, -1)
+        a = set(str(i) for i in range(self.MAX_CONVERSATIONS))
+        b = set(all_conversation_ids)
+        tmp = a - b
+        if not tmp:
             logging.warn('too many conversations!')
             return -1, False
-        new_conversation_id = max_converastion_id + 1
+        if not len(all_conversation_ids):
+            new_conversation_id = '0'
+        else:
+            new_conversation_id = min(tmp)
         await self.r.rpush(f'{self.CONVERSATION_ID_KEY}:{user_id}', new_conversation_id)
         await self.r.hset(f'{self.CONVERSATION_DICT_KEY}:{user_id}', new_conversation_id, 'Default Conversation')
         current_key = f'{self.CONVERSATION_CURRENT_KEY}:{user_id}'
@@ -133,13 +138,21 @@ class ConversationManager:
         await self.r.expire(content_key, self.DEFAULT_TTL)
         return True
 
-    async def clear_conversation(self, user_id: str, conversation_id: str = None):
-        conversation_id = conversation_id or '0'
-        await self.r.hdel(f'{self.CONVERSATION_CONTENT_KEY}:{user_id}', conversation_id)
-
     async def name_conversation(self, user_id: str, name: str, conversation_id: str = None):
         conversation_id = conversation_id or self.get_current_conversation_id(user_id)
         await self.r.hset(f'{self.CONVERSATION_DICT_KEY}:{user_id}', conversation_id, name)
+
+    async def delete_conversation(self, user_id: str, conversation_id: str):
+        conversation_id_key = f'{self.CONVERSATION_ID_KEY}:{user_id}'
+        idx = await self.r.lpos(conversation_id_key, conversation_id)
+        if idx is None:
+            return False
+        final = await self.r.rpop(conversation_id_key)
+        await self.r.lset(conversation_id_key, idx - 1, final)
+
+        await self.r.hdel(f'{self.CONVERSATION_DICT_KEY}:{user_id}', conversation_id)
+        await self.r.hdel(f'{self.CONVERSATION_CONTENT_KEY}:{user_id}', conversation_id)
+        return True
 
 
 manager = ConversationManager()
@@ -165,15 +178,7 @@ async def log_request(logger, body, next):
 async def flush_command(ack, body):
     user_id = body["user_id"]
     await manager.flush_conversation(user_id)
-    await ack(text='All conversations flushed.')
-
-
-# @app.command('/terminate')
-# async def terminate_command(ack, body):
-#     user_id = body["user_id"]
-#     conversation_id = body.get('text')
-#     await manager.clear_conversation(user_id, conversation_id)
-#     await ack(text=f'Conversation {conversation_id or 0} terminated.')
+    await ack(text='[System] All conversations flushed.')
 
 
 @app.command('/nameit')
@@ -181,13 +186,85 @@ async def nameit_command(ack, body):
     user_id = body["user_id"]
     name = body.get('text')
     if not name:
-        await ack(text='Please provide a name for the conversation.')
+        await ack(text='[System] Please provide a name for the conversation.')
     conversation_id = await manager.get_current_conversation_id(user_id)
     await manager.name_conversation(user_id, name, conversation_id=conversation_id)
-    await ack(text=f'Conversation {conversation_id} is now named {name}.')
+    await ack(text=f'[System] Conversation {conversation_id} is now named {name}.')
 
 
-@app.command("/ls")
+@app.command('/delete')
+async def delete_command(ack, body):
+    user_id = body["user_id"]
+    # await ack(f"Hi <@{user_id}>! {body['text']}")
+    conversations = await manager.get_conversation_dict(user_id)
+    current_conversation_id = await manager.get_current_conversation_id(user_id)
+    await ack(
+        blocks=[
+            {
+                "type": "section",
+                "text": {
+                        "type": "mrkdwn",
+                        "text": "[System] *Select a conversation to delete:*"
+                }
+            },
+        ] + [
+            {
+                "type": "section",
+                "text": {
+                        "type": "mrkdwn",
+                        "text": f"*{key}*. {conversations[key]}{' *<----Current Conversation---->*' if key == current_conversation_id else ''}"
+                },
+                "accessory": {
+                    "type": "button",
+                    "text": {
+                            "type": "plain_text",
+                        "emoji": True,
+                        "text": "Delete"
+                    },
+                    "value": f"{key}",
+                    "action_id": f"delete_{key}"
+                }
+            }
+            for key in sorted(conversations.keys()) if conversations
+        ]
+    )
+
+
+@ app.action(re.compile(r'delete_([0-9]+)'))
+async def handle_conversation_delete(ack, context, body, say):
+    user_id = body['user']['id']
+    val = body['actions'][0]['value']
+    await ack()
+    current_conversation_id = await manager.get_current_conversation_id(user_id)
+    if str(current_conversation_id) == val:
+        await say(text='[System] Cannot delete current conversation.')
+        return
+    d = await manager.get_conversation_dict(user_id)
+    if d.get(val) is None:
+        await say(text='[System] Invalid conversation id.')
+        return
+    if len(d) <= 1:
+        await say(text='[System] Cannot delete the last conversation.')
+        return
+    await manager.delete_conversation(user_id, val)
+    await say(text=f'[System] Conversation {val} deleted.')
+
+
+@app.command('/help')
+async def help_command(ack, body):
+    user_id = body["user_id"]
+    await ack(text=(
+        f'[System] Hi <@{user_id}>! Here are the commands you can use:\n'
+        '/ls: List all conversations.\n'
+        '/nameit: Name the current conversation.\n'
+        '/delete: Delete a conversation.\n'
+        '/flush: Flush all conversations.\n'
+        '/help: Show this message.\n'
+        'Talk to bot directly to start a new conversation.'
+    ))
+
+
+@ app.command("/ls")
 async def hello_command(ack, body):
     user_id = body["user_id"]
     # await ack(f"Hi <@{user_id}>! {body['text']}")
@@ -199,7 +276,7 @@ async def hello_command(ack, body):
                 "type": "section",
                 "text": {
                         "type": "mrkdwn",
-                        "text": "*Select a conversation:*"
+                        "text": "[System] *Select a conversation to resume:*"
                 }
             },
         ] + [
@@ -207,7 +284,7 @@ async def hello_command(ack, body):
                 "type": "section",
                 "text": {
                         "type": "mrkdwn",
-                        "text": f"*{key}*. {value}{' *<----Current Conversation---->*' if key == current_conversation_id else ''}"
+                        "text": f"*{key}*. {conversations[key]}{' *<----Current Conversation---->*' if key == current_conversation_id else ''}"
                 },
                 "accessory": {
                     "type": "button",
@@ -220,7 +297,7 @@ async def hello_command(ack, body):
                     "action_id": f"ls_enter_{key}"
                 }
             }
-            for key, value in conversations.items() if conversations
+            for key in sorted(conversations.keys()) if conversations
         ] + [{
             "type": "actions",
             "elements": [
@@ -239,9 +316,8 @@ async def hello_command(ack, body):
     )
 
 
-@app.action(re.compile(r'ls_enter_([0-9]+|new)'))
+@ app.action(re.compile(r'ls_enter_([0-9]+|new)'))
 async def handle_conversation_switch(ack, context, body, say):
-    print(body, context)
     user_id = body['user']['id']
     val = body['actions'][0]['value']
     await ack()
@@ -249,16 +325,20 @@ async def handle_conversation_switch(ack, context, body, say):
         # create a new conversation
         conversation_id, flag = await manager.create_conversation(user_id)
         if not flag:
-            await say(text='Failed to create a new conversation, allow no more than 10 conversations and please terminate one before creating a new one.')
+            await say(text='[System] Failed to create a new conversation, allow no more than 10 conversations and please terminate one before creating a new one.')
             return
-        await say(text=f'Conversation {conversation_id} created.')
+        await say(text=f'[System] Conversation {conversation_id} created.')
     else:
+        current_conversation_id = await manager.get_current_conversation_id(user_id)
+        if str(current_conversation_id) == str(val):
+            await say(text=f'[System] Already in this conversation {current_conversation_id}.')
+            return
         # switch to the conversation
         conversation_id = int(val)
         if conversation_id > 9:
-            await say(text='Invalid conversation id.')
+            await say(text='[System] Invalid conversation id.')
         await manager.set_current_conversation_id(user_id, conversation_id)
-        await say(text=f'Conversation {conversation_id} attached.')
+        await say(text=f'[System] Conversation {conversation_id} attached.')
 
 
 @ app.event("message")
@@ -278,7 +358,7 @@ async def handle_message_events(body, say):
         await say(text='[System] Something went wrong, please try again later.')
         return
     if len(c) == 1:
-        await say(text='[System] Hi! You\'ve started a new conversation! Please be patient and wait for ChatGPT to reply...')
+        await say(text='[System] Hi! You\'re in a new conversation! Please be patient and wait for ChatGPT to reply...')
     c.append({'role': 'user', 'content': text})
     message = await gpt.chat_completion(c)
     c.append({'role': message.role, 'content': message.content})
