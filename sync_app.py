@@ -4,6 +4,8 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 import config
 from chatgpt_legacy import chatgpt
 
+# to be implemented
+
 
 def make_command_conversation_id(channel_id: str, user_id: str, channel_name: str) -> str:
     conversation_id = None
