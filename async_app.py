@@ -195,7 +195,6 @@ async def nameit_command(ack, body):
 @app.command('/delete')
 async def delete_command(ack, body):
     user_id = body["user_id"]
-    # await ack(f"Hi <@{user_id}>! {body['text']}")
     conversations = await manager.get_conversation_dict(user_id)
     current_conversation_id = await manager.get_current_conversation_id(user_id)
     await ack(
@@ -267,7 +266,6 @@ async def help_command(ack, body):
 @ app.command("/ls")
 async def hello_command(ack, body):
     user_id = body["user_id"]
-    # await ack(f"Hi <@{user_id}>! {body['text']}")
     conversations = await manager.get_conversation_dict(user_id)
     current_conversation_id = await manager.get_current_conversation_id(user_id)
     await ack(
@@ -364,8 +362,3 @@ async def handle_message_events(body, say):
     c.append({'role': message.role, 'content': message.content})
     await manager.set_conversation(user_id, conversation_id, messages=c)
     await say(text=message.content)
-
-
-# @app.event("app_mention")
-# async def event_test(event, say):
-#     await say(f"Hi there, <@{event['user']}>!")
