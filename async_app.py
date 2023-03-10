@@ -358,7 +358,11 @@ async def handle_message_events(body, say):
     if len(c) == 1:
         await say(text='[System] Hi! You\'re in a new conversation! Please be patient and wait for ChatGPT to reply...')
     c.append({'role': 'user', 'content': text})
-    message = await gpt.chat_completion(c)
+    try:
+        message = await gpt.chat_completion(c)
+    except Exception as e:
+        await say(text=f'[System] Error: {e}')
+        return
     c.append({'role': message.role, 'content': message.content})
     await manager.set_conversation(user_id, conversation_id, messages=c)
     await say(text=message.content)
