@@ -394,7 +394,7 @@ async def handle_message_events(body, say, respond):
         if cnt % 8 == 0:
             try:
                 res = await app.client.chat_update(channel=channel,
-                                                   text=full_message + '\n\n [Typing... It takes ' + '{:02f}'.format(time.time() - start_time) + ' seconds to generate this message.]',
+                                                   text=full_message + '\n\n [Typing... It takes ' + '{:.2f}'.format(time.time() - start_time) + ' seconds to generate this message.]',
                                                    ts=res['ts']
                                                    )
             except Exception as err:
