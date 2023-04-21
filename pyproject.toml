@@ -8,7 +8,7 @@ packages = []
 
 [tool.poetry.dependencies]
 python = "^3.9.0"
-openai = "0.27.0"
+openai = "^0.27.0"
 slack-bolt = "^1.16.1"
 tiktoken = "^0.2.0"
 redis = "^4.5.1"

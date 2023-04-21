@@ -3,6 +3,7 @@ from typing import List
 import json
 import logging
 import re
+import time
 
 from slack_bolt.async_app import AsyncApp
 import redis.asyncio as redis
@@ -36,14 +37,26 @@ class ChatGPT:
     async def chat_completion_stream(self, messages: List[any], temperature: float = 0, max_tokens: int = 0):
         temperature = temperature or self.temperature
         max_tokens = max_tokens or self.max_tokens
-        events = await openai.ChatCompletion.acreate(
+        events = openai.ChatCompletion.create(
             model=Models.TURBO.value,
             messages=messages,
             temperature=temperature,
             stream=True
         )
         for event in events:
-            yield event['choices'][0].message
+            yield event['choices'][0]['delta']
+
+    # async def chat_completion_stream(self, messages: List[any], temperature: float = 0, max_tokens: int = 0):
+    #     temperature = temperature or self.temperature
+    #     max_tokens = max_tokens or self.max_tokens
+    #     events = await openai.ChatCompletion.acreate(
+    #         model=Models.TURBO.value,
+    #         messages=messages,
+    #         temperature=temperature,
+    #         stream=True
+    #     )
+    #     for event in events:
+    #         yield event['choices'][0].message
 
 
 gpt = ChatGPT(config.OPENAI_API_KEY)
@@ -340,15 +353,21 @@ async def handle_conversation_switch(ack, context, body, say):
 
 
 @ app.event("message")
-async def handle_message_events(body, say):
+async def handle_message_events(body, say, respond):
     event = body['event']
 
-    user_id = event['user']
+    user_id = event.get('user')
+    if not user_id:
+        print('[System] No user id found.')
+        return
     text = event['text']
     channel_id = event['channel']
     thread_ts = event.get('thread_ts')
     channel_type = event.get('channel_type')
     channel = event.get('channel')
+
+    # loading...
+    res = await say(text='[System] Typing...')
 
     conversation_id = await manager.get_current_conversation_id(user_id)
     c, flag = await manager.get_create_conversation(user_id, conversation_id)
@@ -358,7 +377,28 @@ async def handle_message_events(body, say):
     if len(c) == 1:
         await say(text='[System] Hi! You\'re in a new conversation! Please be patient and wait for ChatGPT to reply...')
     c.append({'role': 'user', 'content': text})
-    message = await gpt.chat_completion(c)
-    c.append({'role': message.role, 'content': message.content})
+
+    full_message = ''
+    role = ''
+    start_time = time.time()
+    chunks = gpt.chat_completion_stream(c)
+    cnt = 0
+    async for chunk in chunks:
+        cnt = cnt + 1
+        message_chunk = chunk.get('content', '')
+        if not message_chunk:
+            role = chunk.get('role', '') or role
+            continue
+        full_message += message_chunk
+        if cnt % 5 == 0:
+            res = await app.client.chat_update(channel=channel,
+                                               text=full_message + '\n\n [Typing... It takes ' + str(time.time() - start_time) + ' seconds to generate this message.]',
+                                               ts=res['ts']
+                                               )
+    res = await app.client.chat_update(channel=channel,
+                                       text=full_message,
+                                       ts=res['ts']
+                                       )
+    c.append({'role': role, 'content': full_message})
+    print(c)
     await manager.set_conversation(user_id, conversation_id, messages=c)
-    await say(text=message.content)
