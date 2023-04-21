@@ -367,7 +367,8 @@ async def handle_message_events(body, say, respond):
     channel = event.get('channel')
 
     # loading...
-    res = await say(text='[System] Typing...')
+    res = await say(text='Typing...')
+    time.sleep(0.05)
 
     conversation_id = await manager.get_current_conversation_id(user_id)
     c, flag = await manager.get_create_conversation(user_id, conversation_id)
@@ -390,15 +391,20 @@ async def handle_message_events(body, say, respond):
             role = chunk.get('role', '') or role
             continue
         full_message += message_chunk
-        if cnt % 5 == 0:
-            res = await app.client.chat_update(channel=channel,
-                                               text=full_message + '\n\n [Typing... It takes ' + str(time.time() - start_time) + ' seconds to generate this message.]',
-                                               ts=res['ts']
-                                               )
+        if cnt % 8 == 0:
+            try:
+                res = await app.client.chat_update(channel=channel,
+                                                   text=full_message + '\n\n [Typing... It takes ' + '{:02f}'.format(time.time() - start_time) + ' seconds to generate this message.]',
+                                                   ts=res['ts']
+                                                   )
+            except Exception as err:
+                if 'ratelimited' in str(err):
+                    logging.INFO(f'rate limited {err}')
+                    time.sleep(0.5)
+                    continue
     res = await app.client.chat_update(channel=channel,
                                        text=full_message,
                                        ts=res['ts']
                                        )
     c.append({'role': role, 'content': full_message})
-    print(c)
     await manager.set_conversation(user_id, conversation_id, messages=c)
