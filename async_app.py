@@ -382,7 +382,14 @@ async def handle_message_events(body, say, respond):
     full_message = ''
     role = ''
     start_time = time.time()
-    chunks = gpt.chat_completion_stream(c)
+    try:
+        chunks = gpt.chat_completion_stream(c)
+    except openai.error.InvalidRequestError as e:
+        await app.client.chat_update(channel=channel,
+                                     text="[System] OpenAI API call failed: " + str(e),
+                                     ts=res['ts']
+                                     )
+        return
     cnt = 0
     async for chunk in chunks:
         cnt = cnt + 1
