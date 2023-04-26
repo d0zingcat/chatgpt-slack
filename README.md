@@ -34,6 +34,13 @@ This project means to build a bot in slack ecosystem, interats with slack users 
 ![](docs/images/context_delete.png)
 
 # updates
+## 2023-04-26
+* Add error message for OpenAI.
+* Use async api for OpenAI.
+
+## 2023-04-21
+* Add stream response like Claude bot.
+
 ## 2023-03-09
 * Support session management.
 
