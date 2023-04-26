@@ -37,13 +37,13 @@ class ChatGPT:
     async def chat_completion_stream(self, messages: List[any], temperature: float = 0, max_tokens: int = 0):
         temperature = temperature or self.temperature
         max_tokens = max_tokens or self.max_tokens
-        events = openai.ChatCompletion.create(
+        events = await openai.ChatCompletion.acreate(
             model=Models.TURBO.value,
             messages=messages,
             temperature=temperature,
             stream=True
         )
-        for event in events:
+        async for event in events:
             yield event['choices'][0]['delta']
 
     # async def chat_completion_stream(self, messages: List[any], temperature: float = 0, max_tokens: int = 0):
@@ -383,35 +383,35 @@ async def handle_message_events(body, say, respond):
     role = ''
     start_time = time.time()
     try:
+        cnt = 0
         chunks = gpt.chat_completion_stream(c)
+        async for chunk in chunks:
+            cnt = cnt + 1
+            message_chunk = chunk.get('content', '')
+            if not message_chunk:
+                role = chunk.get('role', '') or role
+                continue
+            full_message += message_chunk
+            if cnt % 8 == 0:
+                try:
+                    res = await app.client.chat_update(channel=channel,
+                                                       text=full_message + '\n\n [Typing... It takes ' + '{:.2f}'.format(time.time() - start_time) + ' seconds to generate this message.]',
+                                                       ts=res['ts']
+                                                       )
+                except Exception as err:
+                    if 'ratelimited' in str(err):
+                        logging.INFO(f'rate limited {err}')
+                        time.sleep(0.5)
+                        continue
+        res = await app.client.chat_update(channel=channel,
+                                           text=full_message,
+                                           ts=res['ts']
+                                           )
+        c.append({'role': role, 'content': full_message})
+        await manager.set_conversation(user_id, conversation_id, messages=c)
     except openai.error.InvalidRequestError as e:
         await app.client.chat_update(channel=channel,
-                                     text="[System] OpenAI API call failed: " + str(e),
+                                     text="[System] OpenAI API call failed: " + str(e) + "\n Which means you should create a new conversation or /flush all the conversations.",
                                      ts=res['ts']
                                      )
         return
-    cnt = 0
-    async for chunk in chunks:
-        cnt = cnt + 1
-        message_chunk = chunk.get('content', '')
-        if not message_chunk:
-            role = chunk.get('role', '') or role
-            continue
-        full_message += message_chunk
-        if cnt % 8 == 0:
-            try:
-                res = await app.client.chat_update(channel=channel,
-                                                   text=full_message + '\n\n [Typing... It takes ' + '{:.2f}'.format(time.time() - start_time) + ' seconds to generate this message.]',
-                                                   ts=res['ts']
-                                                   )
-            except Exception as err:
-                if 'ratelimited' in str(err):
-                    logging.INFO(f'rate limited {err}')
-                    time.sleep(0.5)
-                    continue
-    res = await app.client.chat_update(channel=channel,
-                                       text=full_message,
-                                       ts=res['ts']
-                                       )
-    c.append({'role': role, 'content': full_message})
-    await manager.set_conversation(user_id, conversation_id, messages=c)
